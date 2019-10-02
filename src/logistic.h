@@ -12,3 +12,6 @@ Col<float> logistic_grad(const Mat<float> &data, const Col<float> &target,
 
 Col<float> logistic_grad(const Col<float> &prod, const Mat<float> &data,
 		const Col<float> &target);
+
+Col<float> logistic_grad(const Col<float> &prod, const SpMat<float> &data,
+		const Col<float> &target);
