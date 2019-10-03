@@ -1,8 +1,8 @@
 #!/bin/bash
-#SBATCH --job-name=rcv1bin_sgd
-#SBATCH --output=logs/log_rcv1bin_sgd_async8
-
+#SBATCH --job-name=url_sgd
+#SBATCH --output=logs/log_url_sgd_async8
 #SBATCH --nodes=8 #number of nodes requested
+
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=3
 #SBATCH --mem=50g
@@ -16,9 +16,9 @@
 module purge
 module load openmpi/3.1.1 gcc/5.4.0 cmake/3.13.3 mkl/2019.4 lapack/3.8.0
 mpirun -np $SLURM_NTASKS ./bin/afdsgd \
-    --reg 1e-4 --eta 1 \
-    --d 47236 --n_train 16194 --n_test 4048 \
-    --save_interval 1200 --save_num 30 \
-    --sync 0 --max 0 --delay 0 
-    #--train_data "/ihome/hhuang/anx6/datasets/rcv1_train.binary_train" \
-    #--test_data "/ihome/hhuang/anx6/datasets/rcv1_train.binary_test"
+    --reg 1e-4 --eta 0.01 \
+    --d 3231961 --n_train 1916904 --n_test 479226 \
+    --save_interval 1000 --save_num 20 \
+    --sync 0 --max 0 --delay 0\
+    --train_data "/ihome/hhuang/anx6/datasets/url_combined_train" \
+    --test_data "/ihome/hhuang/anx6/datasets/url_combined_test"

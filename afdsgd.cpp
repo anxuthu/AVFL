@@ -21,8 +21,8 @@
 DEFINE_double(reg, 1e-4, "regularization coefficient");
 DEFINE_double(eta, 1, "step size");
 
-DEFINE_string(train_data, "/export/UserData/an/real-sim", "training data path");
-DEFINE_string(test_data, "/export/UserData/an/real-sim.t", "training data path");
+DEFINE_string(train_data, "/ihome/hhuang/anx6/datasets/rcv1_train.binary_train", "training data path");
+DEFINE_string(test_data, "/ihome/hhuang/anx6/datasets/rcv1_train.binary_test", "training data path");
 DEFINE_int32(d, 20958, "number of features");
 DEFINE_int32(n_train, 57848, "number of training instances");
 DEFINE_int32(n_test, 14461, "number of testing instances");
@@ -128,10 +128,11 @@ int main(int argc, char* argv[]) {
 		int idx = rand() % xl.n_cols;
 		total_prod.fill(0);
 		for (int r = 0; r < size; r++) {
-			//MPI_Send(&idx, 1, MPI_INT, r, 0, MPI_COMM_WORLD);
 			MPI_Isend(&idx, 1, MPI_INT, r, 0, MPI_COMM_WORLD, &req);
-			MPI_Recv(prod.begin(), prod.size(), MPI_FLOAT, r, 1, MPI_COMM_WORLD,
-					&status);
+		}
+		for (int r = 0; r < size; r++) {
+			MPI_Recv(prod.begin(), prod.size(), MPI_FLOAT, MPI_ANY_SOURCE, 1,
+					MPI_COMM_WORLD, &status);
 			total_prod += prod;
 		}
 		if (FLAGS_sync) {
@@ -152,6 +153,8 @@ int main(int argc, char* argv[]) {
 			duration<float> elapsed_sec = duration_cast<duration<float>>(
 					cur - start);
 			elapsed(to_save) = elapsed_sec.count();
+            std::cout << "Process " << rank << " saved num: " << to_save
+                << std::endl;
 		}
 	}
 
@@ -163,6 +166,7 @@ int main(int argc, char* argv[]) {
 	t.join();
 
 	/*** Testing ***/
+    std::cout << "Process " << rank << " start evaluation." << std::endl;
 	std::pair<SpMat<float>, Col<float>> test_data = ReadLibsvmSp(
 			FLAGS_test_data, start_feature, end_feature, FLAGS_n_test);
 	SpMat<float> test_xl = std::get<0>(test_data);
