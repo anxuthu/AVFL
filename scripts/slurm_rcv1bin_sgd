@@ -1,6 +1,6 @@
 #!/bin/bash
-#SBATCH --job-name=AVFL
-#SBATCH --output=avfl.out
+#SBATCH --job-name=rcv1bin_sgd
+#SBATCH --output=log_rcv1bin_sgd_
 
 #SBATCH --nodes=8 #number of nodes requested
 #SBATCH --ntasks-per-node=1
@@ -14,13 +14,11 @@
 #SBATCH --qos=long # required if walltime is greater than 3 days
 
 module purge
-module load openmpi/3.1.1 gcc/5.4.0 mkl/2019.4
+module load openmpi/3.1.1 gcc/5.4.0 cmake/3.13.3 mkl/2019.4 lapack/3.8.0
 mpirun -np $SLURM_NTASKS ./bin/afdsgd \
-	--save_interval 100 --save_num 50 \
-	--sync 0 --max 0 --delay 0 \
-	--eta 1 --reg 1e-4 \
-	--train_data /ihome/hhuang/anx6/datasets/real-sim \
-	--test_data /ihome/hhuang/anx6/datasets/real-sim.t \
-	--d 20958 \
-	--n_train 57848 \
-	--n_test 14461
+    --reg 1e-4 --eta 1 \
+    --train_data "/ihome/hhuang/anx6/datasets/rcv1_train.binary_train" \
+    --test_data "/ihome/hhuang/anx6/datasets/rcv1_train.binary_test" \
+    --d 47236 --n_train 16194 --n_test 4048 \
+    --save_interval 1200 --save_num 30 \
+    --sync 0 --max 0 --delay 0
