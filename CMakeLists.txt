@@ -14,5 +14,10 @@ include(CheckCXXCompilerFlag)
 file(GLOB headers "${dir}/src/*.h")
 file(GLOB objs "${dir}/src/*.cpp")
 
+#include_directories("/ihome/hhuang/anx6/usr/include")
+#add_library(armadillo SHARED IMPORTED)
+#set_property(TARGET armadillo
+#   PROPERTY IMPORTED_LOCATION "/ihome/hhuang/anx6/usr/lib64/libarmadillo.so")
+
 add_executable(afdsgd "afdsgd.cpp" ${objs} ${headers})
 target_link_libraries(afdsgd gflags armadillo)

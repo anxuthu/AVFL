@@ -109,7 +109,7 @@ int main(int argc, char* argv[]) {
 	Mat<float> wl_bk(xl.n_rows, FLAGS_save_num + 1, fill::zeros);
 	Col<float> elapsed(FLAGS_save_num + 1, fill::zeros);
 	std::cout << "Process " << rank << " load data size " << xl.n_rows
-		<< "x" << xl.n_cols << " and " << xl.n_rows << "x1" << std::endl;
+		<< "x" << xl.n_cols << " and " << xl.n_cols << "x1" << std::endl;
 
 	thread t([&]{listener(size, xl, wl);});
 
@@ -134,15 +134,15 @@ int main(int argc, char* argv[]) {
 					&status);
 			total_prod += prod;
 		}
+		if (FLAGS_sync) {
+			MPI_Barrier(MPI_COMM_WORLD);
+		}
 
 		// compute stochastic gradient
 		grad = logistic_grad(total_prod, xl.col(idx), yl.row(idx));
 		{
 			lock_guard<mutex> lock(wl_mutex);
 			wl = wl - FLAGS_eta * (grad + FLAGS_reg * wl);
-		}
-		if (FLAGS_sync) {
-			MPI_Barrier(MPI_COMM_WORLD);
 		}
 
 		if ((i + 1) % FLAGS_save_interval == 0) {
@@ -193,9 +193,10 @@ int main(int argc, char* argv[]) {
 		MPI_Reduce(train_prod.begin(), train_total_prod.begin(), train_prod.size(),
 				MPI_FLOAT, MPI_SUM, FLAGS_root, MPI_COMM_WORLD);
 		if (rank == FLAGS_root) {
-			float test_obj = logistic(test_prod, test_yl);
-			float train_obj = logistic(train_prod, yl);
-			cout << "Step: " << FLAGS_save_interval * i << " Time:" << elapsed(i)
+			float test_obj = logistic(test_total_prod, test_yl);
+			float train_obj = logistic(train_total_prod, yl);
+			cout << "Step: " << FLAGS_save_interval * i << " Time: " << elapsed(i)
+				<< setprecision(15)
 				<< " Train obj: " << train_obj << " Test obj: " << test_obj
 				<< std::endl;
 		}
