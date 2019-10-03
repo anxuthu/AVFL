@@ -18,8 +18,6 @@
 #include "src/read_libsvm.h"
 #include "src/logistic.h"
 
-DEFINE_int32(t, 10, "svrg outer iterations");
-DEFINE_int32(m, 19996, "svrg inner iterations");
 DEFINE_double(reg, 1e-4, "regularization coefficient");
 DEFINE_double(eta, 1, "step size");
 
@@ -36,7 +34,7 @@ DEFINE_int32(root, 0, "MPI root.");
 DEFINE_int32(seed, 1234, "Random seed.");
 
 DEFINE_int32(sync, 0, "Async or sync");
-DEFINE_int32(min, 0, "");
+DEFINE_int32(max, 0, "");
 DEFINE_double(delay, 0, "random delay");
 
 using namespace std;
@@ -124,10 +122,6 @@ int main(int argc, char* argv[]) {
 	start = steady_clock::now();
 	int steps = FLAGS_save_num * FLAGS_save_interval;
 	for (int i = 0; i < steps; i++) {
-		if (FLAGS_sync) {
-			MPI_Barrier(MPI_COMM_WORLD);
-		}
-
 		int delay = distribution(generator) * 1000000;
 		this_thread::sleep_for (std::chrono::microseconds(delay));
 
@@ -146,6 +140,9 @@ int main(int argc, char* argv[]) {
 		{
 			lock_guard<mutex> lock(wl_mutex);
 			wl = wl - FLAGS_eta * (grad + FLAGS_reg * wl);
+		}
+		if (FLAGS_sync) {
+			MPI_Barrier(MPI_COMM_WORLD);
 		}
 
 		if ((i + 1) % FLAGS_save_interval == 0) {
@@ -176,11 +173,17 @@ int main(int argc, char* argv[]) {
 	Col<float> train_prod(xl.n_cols, fill::zeros);
 	Col<float> new_elapsed(FLAGS_save_num + 1, fill::zeros);
 
-	if (FLAGS_min) {
+	if (FLAGS_max) {
+		MPI_Reduce(elapsed.begin(), new_elapsed.begin(), elapsed.size(), MPI_FLOAT,
+				MPI_MAX, FLAGS_root, MPI_COMM_WORLD);
+		elapsed = new_elapsed;
+	}
+	else {
 		MPI_Reduce(elapsed.begin(), new_elapsed.begin(), elapsed.size(), MPI_FLOAT,
 				MPI_MIN, FLAGS_root, MPI_COMM_WORLD);
 		elapsed = new_elapsed;
 	}
+
 	for (int i = 0; i < FLAGS_save_num + 1; i++) {
 		Col<float> wl = wl_bk.col(i);
 		test_prod = test_xl.t() * wl;

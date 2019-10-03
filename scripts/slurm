@@ -1,0 +1,26 @@
+#!/bin/bash
+#SBATCH --job-name=AVFL
+#SBATCH --output=avfl.out
+
+#SBATCH --nodes=8 #number of nodes requested
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=20
+#SBATCH --mem=96g
+#SBATCH --partition=ib # opa, ib
+#SBATCH --cluster=mpi # cluster name is required
+#SBATCH --mail-user=an.xu@pitt.edu #send email to this address if ...
+#SBATCH --mail-type=END,FAIL # ... job ends or fails
+#SBATCH --time=4-00:00 # 4 days walltime in dd-hh:mm format
+#SBATCH --qos=long # required if walltime is greater than 3 days
+
+module purge
+module load openmpi/3.1.1 gcc/5.4.0
+mpirun -np $SLURM_NTASKS ./bin/afdsgd\
+	--save_interval 100 --save_num 50\
+	--sync 0 --max 0 --delay 0\
+	--eta 1 --reg 1e-4\
+	--train_data /ihome/hhuang/anx6/datasets/real-sim\
+	--test_data /ihome/hhuang/anx6/datasets/real-sim.t\
+	--d 20958\
+	--n_train 57848\
+	--n_test 14461
