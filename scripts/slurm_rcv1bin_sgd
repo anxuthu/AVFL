@@ -19,6 +19,6 @@ mpirun -np $SLURM_NTASKS ./bin/afdsgd \
     --reg 1e-4 --eta 1 \
     --d 47236 --n_train 16194 --n_test 4048 \
     --save_interval 1200 --save_num 30 \
-    --sync 0 --max 0 --delay 0 
-    #--train_data "/ihome/hhuang/anx6/datasets/rcv1_train.binary_train" \
-    #--test_data "/ihome/hhuang/anx6/datasets/rcv1_train.binary_test"
+    --sync 0 --max 0 --delay 0 \
+    --train_data "/ihome/hhuang/anx6/datasets/rcv1_train_binary_train" \
+    --test_data "/ihome/hhuang/anx6/datasets/rcv1_train_binary_test"
