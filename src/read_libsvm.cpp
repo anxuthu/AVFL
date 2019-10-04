@@ -23,7 +23,7 @@ std::pair<Mat<float>, Col<float>> ReadLibsvm(std::string filename,
 		}
 		// read target
 		int cur = 0;
-		target(i) = std::stoi(line.substr(0, line.find_first_of(' ', cur) - cur));
+		target(i) = std::stod(line.substr(0, line.find_first_of(' ', cur) - cur));
 		cur = line.find_first_of(' ', cur) + 1;
 
 		while (cur < line.length()) {
@@ -63,7 +63,7 @@ std::pair<SpMat<float>, Col<float>> ReadLibsvmSp(std::string filename,
 		}
 		// read target
 		int cur = 0;
-		target(i) = std::stoi(line.substr(0, line.find_first_of(' ', cur) - cur));
+		target(i) = std::stod(line.substr(0, line.find_first_of(' ', cur) - cur));
 		cur = line.find_first_of(' ', cur) + 1;
 
 		while (cur < line.length()) {

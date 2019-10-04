@@ -21,14 +21,14 @@
 DEFINE_double(reg, 1e-4, "regularization coefficient");
 DEFINE_double(eta, 1, "step size");
 
-DEFINE_string(train_data, "/ihome/hhuang/anx6/datasets/rcv1_train.binary_train", "training data path");
-DEFINE_string(test_data, "/ihome/hhuang/anx6/datasets/rcv1_train.binary_test", "training data path");
+DEFINE_string(train_data, "/export/UserData/an/real-sim", "training data path");
+DEFINE_string(test_data, "/export/UserData/an/real-sim.t", "training data path");
 DEFINE_int32(d, 20958, "number of features");
 DEFINE_int32(n_train, 57848, "number of training instances");
 DEFINE_int32(n_test, 14461, "number of testing instances");
 
-DEFINE_int32(save_interval, 10, "save every #iter");
-DEFINE_int32(save_num, 51, "total save num");
+DEFINE_int32(save_interval, 50, "save every #iter");
+DEFINE_int32(save_num, 20, "total save num");
 
 DEFINE_int32(root, 0, "MPI root.");
 DEFINE_int32(seed, 1234, "Random seed.");
@@ -71,49 +71,18 @@ void listener(int size, SpMat<float> &xl, Col<float> &wl) {
 	}
 }
 
-int main(int argc, char* argv[]) {
-	gflags::ParseCommandLineFlags(&argc, &argv, true);
-	arma_rng::set_seed(FLAGS_seed);
-	srand(FLAGS_seed);
 
-	int rank, size, provided, thread_level = MPI_THREAD_MULTIPLE;
-	MPI_Status status;
+void sgd_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl_bk,
+		Col<float>& elapsed) {
+	int rank, size;
 	MPI_Request req;
-	
-	MPI_Init_thread(&argc, &argv, thread_level, &provided);
-	assert(thread_level <= provided && "MPI_THREAD_MULTIPLE not supported!");
+	MPI_Status status;
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 	MPI_Comm_size(MPI_COMM_WORLD, &size);
 
-	// sizes
-	vector<int> feature_sizes(size, FLAGS_d / size);
-	for (int i = 0; i < FLAGS_d % size; i++) {
-		feature_sizes[i] += 1;
-	}
-	int start_feature = 0, end_feature = 0;
-	for (int i = 0; i < rank; i++) {
-		start_feature += feature_sizes[i];
-	}
-	end_feature = start_feature + feature_sizes[rank];
-
-	// initialize and load data: xl (dlxn), yl (nx1)
-	std::pair<SpMat<float>, Col<float>> data = ReadLibsvmSp(
-			FLAGS_train_data, start_feature, end_feature, FLAGS_n_train);
-	SpMat<float> xl = std::get<0>(data);
-	Col<float> yl = std::get<1>(data);
-	Col<float> wl(xl.n_rows, fill::zeros);
 	Col<float> grad(xl.n_rows, fill::zeros);
-
 	Col<float> total_prod(1, fill::zeros), prod(1, fill::zeros);
 
-	Mat<float> wl_bk(xl.n_rows, FLAGS_save_num + 1, fill::zeros);
-	Col<float> elapsed(FLAGS_save_num + 1, fill::zeros);
-	std::cout << "Process " << rank << " load data size " << xl.n_rows
-		<< "x" << xl.n_cols << " and " << xl.n_cols << "x1" << std::endl;
-
-	thread t([&]{listener(size, xl, wl);});
-
-	/*** Training ***/
 	steady_clock::time_point start, cur;
 	default_random_engine generator;
 	uniform_real_distribution<float> distribution(0, FLAGS_delay);
@@ -123,8 +92,9 @@ int main(int argc, char* argv[]) {
 	int steps = FLAGS_save_num * FLAGS_save_interval;
 	for (int i = 0; i < steps; i++) {
 		int delay = distribution(generator) * 1000000;
-		this_thread::sleep_for (std::chrono::microseconds(delay));
+		this_thread::sleep_for (microseconds(delay));
 
+		// compute total prod
 		int idx = rand() % xl.n_cols;
 		total_prod.fill(0);
 		for (int r = 0; r < size; r++) {
@@ -146,6 +116,7 @@ int main(int argc, char* argv[]) {
 			wl = wl - FLAGS_eta * (grad + FLAGS_reg * wl);
 		}
 
+		// save
 		if ((i + 1) % FLAGS_save_interval == 0) {
 			int to_save = (i + 1) / FLAGS_save_interval;
 			wl_bk.col(to_save) = wl;
@@ -153,10 +124,61 @@ int main(int argc, char* argv[]) {
 			duration<float> elapsed_sec = duration_cast<duration<float>>(
 					cur - start);
 			elapsed(to_save) = elapsed_sec.count();
-            std::cout << "Process " << rank << " saved num: " << to_save
-                << std::endl;
+            cout << "Process " << rank << " saved num: " << to_save << endl;
 		}
 	}
+}
+
+
+void svrg_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Col<float>& wl_bk,
+		Col<float>& elapsed) {}
+
+
+void saga_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Col<float>& wl_bk,
+		Col<float>& elapsed) {}
+
+
+int main(int argc, char* argv[]) {
+	gflags::ParseCommandLineFlags(&argc, &argv, true);
+	arma_rng::set_seed(FLAGS_seed);
+	srand(FLAGS_seed);
+	arma_version ver;
+	cout << "ARMA version: " << ver.as_string() << endl;
+
+	int rank, size, provided, thread_level = MPI_THREAD_MULTIPLE;
+	MPI_Init_thread(&argc, &argv, thread_level, &provided);
+	assert(thread_level <= provided && "MPI_THREAD_MULTIPLE not supported!");
+	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+	MPI_Comm_size(MPI_COMM_WORLD, &size);
+
+	// sizes
+	vector<int> feature_sizes(size, FLAGS_d / size);
+	for (int i = 0; i < FLAGS_d % size; i++) {
+		feature_sizes[i] += 1;
+	}
+	int start_feature = 0, end_feature = 0;
+	for (int i = 0; i < rank; i++) {
+		start_feature += feature_sizes[i];
+	}
+	end_feature = start_feature + feature_sizes[rank];
+
+	// initialize weight and load data: xl (dlxn), yl (nx1)
+	pair<SpMat<float>, Col<float>> data = ReadLibsvmSp(
+			FLAGS_train_data, start_feature, end_feature, FLAGS_n_train);
+	SpMat<float> xl = get<0>(data);
+	Col<float> yl = get<1>(data);
+	Col<float> wl(xl.n_rows, fill::zeros);
+
+	Mat<float> wl_bk(xl.n_rows, FLAGS_save_num + 1, fill::zeros);
+	Col<float> elapsed(FLAGS_save_num + 1, fill::zeros);
+	cout << "Process " << rank << " load data size " << xl.n_rows
+		<< "x" << xl.n_cols << " and " << xl.n_cols << "x1" << endl;
+
+	// start listener
+	thread t([&]{listener(size, xl, wl);});
+
+	/*** Training ***/
+	sgd_train(xl, yl, wl, wl_bk, elapsed);
 
 	// stop listener
 	int idx = -1;
@@ -166,11 +188,11 @@ int main(int argc, char* argv[]) {
 	t.join();
 
 	/*** Testing ***/
-    std::cout << "Process " << rank << " start evaluation." << std::endl;
-	std::pair<SpMat<float>, Col<float>> test_data = ReadLibsvmSp(
+    cout << "Process " << rank << " start evaluation." << endl;
+	pair<SpMat<float>, Col<float>> test_data = ReadLibsvmSp(
 			FLAGS_test_data, start_feature, end_feature, FLAGS_n_test);
-	SpMat<float> test_xl = std::get<0>(test_data);
-	Col<float> test_yl = std::get<1>(test_data);
+	SpMat<float> test_xl = get<0>(test_data);
+	Col<float> test_yl = get<1>(test_data);
 	Col<float> test_total_prod(test_xl.n_cols, fill::zeros);
 	Col<float> test_prod(test_xl.n_cols, fill::zeros);
 	Col<float> train_total_prod(xl.n_cols, fill::zeros);
@@ -201,8 +223,7 @@ int main(int argc, char* argv[]) {
 			float train_obj = logistic(train_total_prod, yl);
 			cout << "Step: " << FLAGS_save_interval * i << " Time: " << elapsed(i)
 				<< setprecision(15)
-				<< " Train obj: " << train_obj << " Test obj: " << test_obj
-				<< std::endl;
+				<< " Train obj: " << train_obj << " Test obj: " << test_obj << endl;
 		}
 	}
 

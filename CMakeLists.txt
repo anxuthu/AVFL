@@ -19,5 +19,5 @@ file(GLOB objs "${dir}/src/*.cpp")
 #set_property(TARGET armadillo
 #   PROPERTY IMPORTED_LOCATION "/ihome/hhuang/anx6/usr/lib64/libarmadillo.so")
 
-add_executable(afdsgd "afdsgd.cpp" ${objs} ${headers})
-target_link_libraries(afdsgd gflags armadillo)
+add_executable(afd "afd.cpp" ${objs} ${headers})
+target_link_libraries(afd gflags armadillo)
