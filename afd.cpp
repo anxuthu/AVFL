@@ -17,18 +17,19 @@
 
 #include "src/read_libsvm.h"
 #include "src/logistic.h"
+#include "src/sparse_ops.h"
 
 DEFINE_double(reg, 1e-4, "regularization coefficient");
 DEFINE_double(eta, 1, "step size");
 
-DEFINE_string(train_data, "/export/UserData/an/real-sim", "training data path");
-DEFINE_string(test_data, "/export/UserData/an/real-sim.t", "training data path");
-DEFINE_int32(d, 20958, "number of features");
-DEFINE_int32(n_train, 57848, "number of training instances");
-DEFINE_int32(n_test, 14461, "number of testing instances");
+DEFINE_string(train_data, "/ihome/hhuang/anx6/datasets/rcv1_test_binary", "training data path");
+DEFINE_string(test_data, "/ihome/hhuang/anx6/datasets/rcv1_train_binary", "training data path");
+DEFINE_int32(d, 47236, "number of features");
+DEFINE_int32(n_train, 677399, "number of training instances");
+DEFINE_int32(n_test, 20242, "number of testing instances");
 
 DEFINE_int32(save_interval, 50, "save every #iter");
-DEFINE_int32(save_num, 20, "total save num");
+DEFINE_int32(save_num, 10, "total save num");
 
 DEFINE_int32(root, 0, "MPI root.");
 DEFINE_int32(seed, 1234, "Random seed.");
@@ -43,12 +44,14 @@ using namespace std::chrono;
 
 mutex wl_mutex;
 
-void listener(int size, SpMat<float> &xl, Col<float> &wl) {
-	int source, idx, finished_workers = 0;
+
+void listener(SpMat<float> &xl, Col<float> &wl) {
+	int size, source, idx, finished_workers = 0;
 	MPI_Status status;
+	MPI_Comm_size(MPI_COMM_WORLD, &size);
+
 	while (1) {
-		MPI_Recv(&idx, 1, MPI_INT, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD,
-				&status);
+		MPI_Recv(&idx, 1, MPI_INT, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &status);
 		source = status.MPI_SOURCE;
 
 		if (idx == -1) {
@@ -65,7 +68,7 @@ void listener(int size, SpMat<float> &xl, Col<float> &wl) {
 		Col<float> prod(1, fill::zeros);
 		{
 			lock_guard<mutex> lock(wl_mutex);
-			prod = xl.col(idx).t() * wl;
+			Mul(xl.col(idx), wl, prod);
 		}
 		MPI_Send(prod.begin(), prod.size(), MPI_FLOAT, source, 1, MPI_COMM_WORLD);
 	}
@@ -80,10 +83,9 @@ void sgd_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl_
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 	MPI_Comm_size(MPI_COMM_WORLD, &size);
 
-	Col<float> grad(xl.n_rows, fill::zeros);
 	Col<float> total_prod(1, fill::zeros), prod(1, fill::zeros);
 
-	steady_clock::time_point start, cur;
+	steady_clock::time_point start;
 	default_random_engine generator;
 	uniform_real_distribution<float> distribution(0, FLAGS_delay);
 
@@ -100,9 +102,9 @@ void sgd_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl_
 		for (int r = 0; r < size; r++) {
 			MPI_Isend(&idx, 1, MPI_INT, r, 0, MPI_COMM_WORLD, &req);
 		}
+
 		for (int r = 0; r < size; r++) {
-			MPI_Recv(prod.begin(), prod.size(), MPI_FLOAT, MPI_ANY_SOURCE, 1,
-					MPI_COMM_WORLD, &status);
+			MPI_Recv(prod.begin(), prod.size(), MPI_FLOAT, MPI_ANY_SOURCE, 1, MPI_COMM_WORLD, &status);
 			total_prod += prod;
 		}
 		if (FLAGS_sync) {
@@ -110,21 +112,17 @@ void sgd_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl_
 		}
 
 		// compute stochastic gradient
-		grad = logistic_grad(total_prod, xl.col(idx), yl.row(idx));
 		{
 			lock_guard<mutex> lock(wl_mutex);
-			wl = wl - FLAGS_eta * (grad + FLAGS_reg * wl);
+			LogisticL2Update(xl.col(idx), yl.row(idx), total_prod, wl, FLAGS_eta, FLAGS_reg);
 		}
 
 		// save
 		if ((i + 1) % FLAGS_save_interval == 0) {
 			int to_save = (i + 1) / FLAGS_save_interval;
 			wl_bk.col(to_save) = wl;
-			cur = steady_clock::now();
-			duration<float> elapsed_sec = duration_cast<duration<float>>(
-					cur - start);
-			elapsed(to_save) = elapsed_sec.count();
-            cout << "Process " << rank << " saved num: " << to_save << endl;
+			elapsed(to_save) = duration_cast<duration<float>>(steady_clock::now() - start).count();
+			cout << "Process " << rank << " saved num: " << to_save << endl;
 		}
 	}
 }
@@ -143,13 +141,16 @@ int main(int argc, char* argv[]) {
 	arma_rng::set_seed(FLAGS_seed);
 	srand(FLAGS_seed);
 	arma_version ver;
-	cout << "ARMA version: " << ver.as_string() << endl;
 
 	int rank, size, provided, thread_level = MPI_THREAD_MULTIPLE;
+	steady_clock::time_point start;
 	MPI_Init_thread(&argc, &argv, thread_level, &provided);
 	assert(thread_level <= provided && "MPI_THREAD_MULTIPLE not supported!");
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 	MPI_Comm_size(MPI_COMM_WORLD, &size);
+	cout << "Process " << rank << " ARMA version: " << ver.as_string()
+		<< " OMP max threads: " << omp_get_max_threads()
+		<< " Train file: " << FLAGS_train_data << " Test file: " << FLAGS_test_data << endl;
 
 	// sizes
 	vector<int> feature_sizes(size, FLAGS_d / size);
@@ -163,6 +164,7 @@ int main(int argc, char* argv[]) {
 	end_feature = start_feature + feature_sizes[rank];
 
 	// initialize weight and load data: xl (dlxn), yl (nx1)
+	start = steady_clock::now();
 	pair<SpMat<float>, Col<float>> data = ReadLibsvmSp(
 			FLAGS_train_data, start_feature, end_feature, FLAGS_n_train);
 	SpMat<float> xl = get<0>(data);
@@ -171,13 +173,14 @@ int main(int argc, char* argv[]) {
 
 	Mat<float> wl_bk(xl.n_rows, FLAGS_save_num + 1, fill::zeros);
 	Col<float> elapsed(FLAGS_save_num + 1, fill::zeros);
-	cout << "Process " << rank << " load data size " << xl.n_rows
-		<< "x" << xl.n_cols << " and " << xl.n_cols << "x1" << endl;
+	cout << "Process " << rank << " load train_data size " << xl.n_rows << "x" << xl.n_cols
+		<< " and " << xl.n_cols << "x1. Time: "
+		<< duration_cast<duration<float>>(steady_clock::now() - start).count() << endl;
 
 	// start listener
-	thread t([&]{listener(size, xl, wl);});
+	thread t([&]{listener(xl, wl);});
 
-	/*** Training ***/
+	/****** Training ******/
 	sgd_train(xl, yl, wl, wl_bk, elapsed);
 
 	// stop listener
@@ -187,8 +190,8 @@ int main(int argc, char* argv[]) {
 	}
 	t.join();
 
-	/*** Testing ***/
-    cout << "Process " << rank << " start evaluation." << endl;
+	/****** Testing ******/
+	start = steady_clock::now();
 	pair<SpMat<float>, Col<float>> test_data = ReadLibsvmSp(
 			FLAGS_test_data, start_feature, end_feature, FLAGS_n_test);
 	SpMat<float> test_xl = get<0>(test_data);
@@ -198,7 +201,11 @@ int main(int argc, char* argv[]) {
 	Col<float> train_total_prod(xl.n_cols, fill::zeros);
 	Col<float> train_prod(xl.n_cols, fill::zeros);
 	Col<float> new_elapsed(FLAGS_save_num + 1, fill::zeros);
+	cout << "Process " << rank << " load test_data size " << test_xl.n_rows
+		<< "x" << test_xl.n_cols << " and " << test_xl.n_cols << "x1. Time: "
+		<< duration_cast<duration<float>>(steady_clock::now() - start).count() << endl;
 
+	start = steady_clock::now();
 	if (FLAGS_max) {
 		MPI_Reduce(elapsed.begin(), new_elapsed.begin(), elapsed.size(), MPI_FLOAT,
 				MPI_MAX, FLAGS_root, MPI_COMM_WORLD);
@@ -212,12 +219,14 @@ int main(int argc, char* argv[]) {
 
 	for (int i = 0; i < FLAGS_save_num + 1; i++) {
 		Col<float> wl = wl_bk.col(i);
-		test_prod = test_xl.t() * wl;
+		Mul(test_xl, wl, test_prod);
 		MPI_Reduce(test_prod.begin(), test_total_prod.begin(), test_prod.size(),
 				MPI_FLOAT, MPI_SUM, FLAGS_root, MPI_COMM_WORLD);
-		train_prod = xl.t() * wl;
+
+		Mul(xl, wl, train_prod);
 		MPI_Reduce(train_prod.begin(), train_total_prod.begin(), train_prod.size(),
 				MPI_FLOAT, MPI_SUM, FLAGS_root, MPI_COMM_WORLD);
+
 		if (rank == FLAGS_root) {
 			float test_obj = logistic(test_total_prod, test_yl);
 			float train_obj = logistic(train_total_prod, yl);
@@ -225,6 +234,11 @@ int main(int argc, char* argv[]) {
 				<< setprecision(15)
 				<< " Train obj: " << train_obj << " Test obj: " << test_obj << endl;
 		}
+	}
+
+	if (rank == FLAGS_root) {
+		cout << "Evaluation time: " << duration_cast<duration<float>>(
+				steady_clock::now() - start).count() << endl;
 	}
 
 	MPI_Finalize();
