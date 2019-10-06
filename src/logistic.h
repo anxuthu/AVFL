@@ -1,17 +1,20 @@
+#ifndef _LOGISTIC_H_
+#define _LOGISTIC_H_
+
 #include <armadillo>
 
-using namespace arma;
+float logistic(const arma::Mat<float> &data, const arma::Col<float> &target,
+		const arma::Col<float> weight);
 
-float logistic(const Mat<float> &data, const Col<float> &target,
-		const Col<float> weight);
+float logistic(const arma::Col<float> &prod, const arma::Col<float> &target);
 
-float logistic(const Col<float> &prod, const Col<float> &target);
+arma::Col<float> logistic_grad(const arma::Mat<float> &data, const arma::Col<float> &target,
+		const arma::Col<float> &weight);
 
-Col<float> logistic_grad(const Mat<float> &data, const Col<float> &target,
-		const Col<float> &weight);
+arma::Col<float> logistic_grad(const arma::Col<float> &prod, const arma::Mat<float> &data,
+		const arma::Col<float> &target);
 
-Col<float> logistic_grad(const Col<float> &prod, const Mat<float> &data,
-		const Col<float> &target);
+arma::Col<float> logistic_grad(const arma::Col<float> &prod, const arma::SpMat<float> &data,
+		const arma::Col<float> &target);
 
-Col<float> logistic_grad(const Col<float> &prod, const SpMat<float> &data,
-		const Col<float> &target);
+#endif
