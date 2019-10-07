@@ -20,7 +20,7 @@
 #include "src/sparse_ops.h"
 
 DEFINE_double(reg, 1e-4, "regularization coefficient");
-DEFINE_double(eta, 1, "step size");
+DEFINE_double(eta, 0.1, "step size");
 
 DEFINE_string(train_data, "/ihome/hhuang/anx6/datasets/rcv1_test_binary", "training data path");
 DEFINE_string(test_data, "/ihome/hhuang/anx6/datasets/rcv1_train_binary", "training data path");
@@ -28,6 +28,8 @@ DEFINE_int32(d, 47236, "number of features");
 DEFINE_int32(n_train, 677399, "number of training instances");
 DEFINE_int32(n_test, 20242, "number of testing instances");
 
+DEFINE_int32(method, 0, "0-sgd, 1-svrg, 2-saga");
+DEFINE_int32(inner, 677399, "inner iteration");
 DEFINE_int32(save_interval, 50, "save every #iter");
 DEFINE_int32(save_num, 10, "total save num");
 
@@ -128,11 +130,91 @@ void sgd_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl_
 }
 
 
-void svrg_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Col<float>& wl_bk,
-		Col<float>& elapsed) {}
+void svrg_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl_bk,
+		Col<float>& elapsed) {
+	int rank, size;
+	MPI_Request req;
+	MPI_Status status;
+	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+	MPI_Comm_size(MPI_COMM_WORLD, &size);
+
+	Col<float> total_prod(1, fill::zeros), prod(1, fill::zeros);
+	Col<float> total_full_prod(xl.n_cols, fill::zeros), full_prod(xl.n_cols, fill::zeros);
+	Col<float> full_gradl(xl.n_rows, fill::zeros);
+
+	steady_clock::time_point start;
+	default_random_engine generator;
+	uniform_real_distribution<float> distribution(0, FLAGS_delay);
+
+	MPI_Barrier(MPI_COMM_WORLD);
+	start = steady_clock::now();
+	int steps = FLAGS_save_num * FLAGS_save_interval;
+	int cur_step = 0;
+	int cur_outer = 0;
+
+	while (1) {
+		// outer iteration
+		auto tmp = steady_clock::now();
+		{
+			lock_guard<mutex> lock(wl_mutex);
+			Mul(xl, wl, full_prod);
+		}
+		MPI_Allreduce(full_prod.begin(), total_full_prod.begin(), full_prod.size(),
+				MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
+		Logistic(xl, yl, total_full_prod, full_gradl);
+		bool stop = false;
+		cout << "Process " << rank << " outer iteration " << cur_outer << ". Full grad time: "
+			<< duration_cast<duration<float>>(steady_clock::now() - tmp).count() << endl;
+
+		// inner iteration
+		for (int i = 0; i < FLAGS_inner; ++i) {
+			int delay = distribution(generator) * 1000000;
+			this_thread::sleep_for (microseconds(delay));
+
+			// compute total prod
+			int idx = rand() % xl.n_cols;
+			total_prod.fill(0);
+			for (int r = 0; r < size; r++) {
+				MPI_Isend(&idx, 1, MPI_INT, r, 0, MPI_COMM_WORLD, &req);
+			}
+			for (int r = 0; r < size; r++) {
+				MPI_Recv(prod.begin(), prod.size(), MPI_FLOAT, MPI_ANY_SOURCE, 1, MPI_COMM_WORLD, &status);
+				total_prod += prod;
+			}
+			if (FLAGS_sync) {
+				MPI_Barrier(MPI_COMM_WORLD);
+			}
+
+			// compute stochastic gradient
+			{
+				lock_guard<mutex> lock(wl_mutex);
+				LogisticL2Update(full_gradl, xl.col(idx), yl.row(idx), total_full_prod.row(idx),
+						total_prod, wl, FLAGS_eta, FLAGS_reg);
+			}
+
+			// save
+			cur_step ++;
+			if (cur_step % FLAGS_save_interval == 0) {
+				int to_save = cur_step / FLAGS_save_interval;
+				wl_bk.col(to_save) = wl;
+				elapsed(to_save) = duration_cast<duration<float>>(steady_clock::now() - start).count();
+				cout << "Process " << rank << " saved num: " << to_save << endl;
+			}
+			if (cur_step  == steps) {
+				stop = true;
+				break;
+			}
+		}
+
+		if (stop) {
+			break;
+		}
+		cur_outer ++;
+	}
+}
 
 
-void saga_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Col<float>& wl_bk,
+void saga_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl_bk,
 		Col<float>& elapsed) {}
 
 
@@ -181,7 +263,18 @@ int main(int argc, char* argv[]) {
 	thread t([&]{listener(xl, wl);});
 
 	/****** Training ******/
-	sgd_train(xl, yl, wl, wl_bk, elapsed);
+	if (FLAGS_method == 0) {
+		sgd_train(xl, yl, wl, wl_bk, elapsed);
+	}
+	else if (FLAGS_method == 1) {
+		svrg_train(xl, yl, wl, wl_bk, elapsed);
+	}
+	else if (FLAGS_method == 2) {
+		saga_train(xl, yl, wl, wl_bk, elapsed);
+	}
+	else {
+		assert(false);
+	}
 
 	// stop listener
 	int idx = -1;
@@ -231,7 +324,7 @@ int main(int argc, char* argv[]) {
 			float test_obj = logistic(test_total_prod, test_yl);
 			float train_obj = logistic(train_total_prod, yl);
 			cout << "Step: " << FLAGS_save_interval * i << " Time: " << elapsed(i)
-				<< setprecision(15)
+				<< setprecision(20)
 				<< " Train obj: " << train_obj << " Test obj: " << test_obj << endl;
 		}
 	}
