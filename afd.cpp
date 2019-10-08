@@ -38,7 +38,8 @@ DEFINE_int32(seed, 1234, "Random seed.");
 
 DEFINE_int32(sync, 0, "Async or sync");
 DEFINE_int32(max, 0, "");
-DEFINE_double(delay, 0, "random delay");
+DEFINE_double(delay_fraction, 0, "random delay");
+DEFINE_int32(straggler, 0, "rank of the straggler");
 
 using namespace std;
 using namespace arma;
@@ -66,12 +67,13 @@ void listener(SpMat<float> &xl, Col<float> &wl) {
 			}
 		}
 
-		// local prod
+		// compute local prod
 		Col<float> prod(1, fill::zeros);
 		{
 			lock_guard<mutex> lock(wl_mutex);
 			Mul(xl.col(idx), wl, prod);
 		}
+		// send back result
 		MPI_Send(prod.begin(), prod.size(), MPI_FLOAT, source, 1, MPI_COMM_WORLD);
 	}
 }
@@ -84,19 +86,15 @@ void sgd_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl_
 	MPI_Status status;
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 	MPI_Comm_size(MPI_COMM_WORLD, &size);
+	steady_clock::time_point start, iter_start;
 
 	Col<float> total_prod(1, fill::zeros), prod(1, fill::zeros);
-
-	steady_clock::time_point start;
-	default_random_engine generator;
-	uniform_real_distribution<float> distribution(0, FLAGS_delay);
 
 	MPI_Barrier(MPI_COMM_WORLD);
 	start = steady_clock::now();
 	int steps = FLAGS_save_num * FLAGS_save_interval;
 	for (int i = 0; i < steps; i++) {
-		int delay = distribution(generator) * 1000000;
-		this_thread::sleep_for (microseconds(delay));
+		iter_start = steady_clock::now();
 
 		// compute total prod
 		int idx = rand() % xl.n_cols;
@@ -125,6 +123,13 @@ void sgd_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl_
 			elapsed(to_save) = duration_cast<duration<float>>(steady_clock::now() - start).count();
 			cout << "Process " << rank << " saved num: " << to_save << " time: " << elapsed(to_save) << endl;
 		}
+
+		// straggler
+		if (rank == FLAGS_straggler) {
+			float sleep_time = duration_cast<duration<float>>(
+					steady_clock::now() - iter_start).count() * 1e9 * FLAGS_delay_fraction;
+			this_thread::sleep_for(nanoseconds(int(sleep_time)));
+		}
 	}
 }
 
@@ -136,14 +141,11 @@ void svrg_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl
 	MPI_Status status;
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 	MPI_Comm_size(MPI_COMM_WORLD, &size);
+	steady_clock::time_point start, iter_start;
 
 	Col<float> total_prod(1, fill::zeros), prod(1, fill::zeros);
 	Col<float> total_full_prod(xl.n_cols, fill::zeros), full_prod(xl.n_cols, fill::zeros);
 	Col<float> full_gradl(xl.n_rows, fill::zeros);
-
-	steady_clock::time_point start;
-	default_random_engine generator;
-	uniform_real_distribution<float> distribution(0, FLAGS_delay);
 
 	MPI_Barrier(MPI_COMM_WORLD);
 	int steps = FLAGS_save_num * FLAGS_save_interval;
@@ -169,8 +171,7 @@ void svrg_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl
 		float base = elapsed(saved);
 		start = steady_clock::now();
 		for (int i = 0; i < FLAGS_inner; ++i) {
-			int delay = distribution(generator) * 1000000;
-			this_thread::sleep_for (microseconds(delay));
+			iter_start = steady_clock::now();
 
 			// compute total prod
 			int idx = rand() % xl.n_cols;
@@ -202,6 +203,15 @@ void svrg_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl
 						steady_clock::now() - start).count() + base;
 				cout << "Process " << rank << " saved num: " << to_save << " time: " << elapsed(to_save) << endl;
 			}
+
+			// straggler
+			if (rank == FLAGS_straggler) {
+				float sleep_time = duration_cast<duration<float>>(
+						steady_clock::now() - iter_start).count() * 1e9 * FLAGS_delay_fraction;
+				this_thread::sleep_for(nanoseconds(int(sleep_time)));
+			}
+
+			// finished
 			if (cur_step  == steps) {
 				stop = true;
 				break;
@@ -223,6 +233,7 @@ void saga_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl
 	MPI_Status status;
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 	MPI_Comm_size(MPI_COMM_WORLD, &size);
+	steady_clock::time_point start, iter_start;
 
 	Col<float> total_prod(1, fill::zeros), prod(1, fill::zeros);
 	Col<float> total_full_prod(xl.n_cols, fill::zeros), full_prod(xl.n_cols, fill::zeros);
@@ -236,16 +247,11 @@ void saga_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl
 	LogisticGrad(xl, yl, total_full_prod, hist_gradl);
 	LogisticGrad(xl, yl, total_full_prod, hist_gradl_avg);
 
-	steady_clock::time_point start;
-	default_random_engine generator;
-	uniform_real_distribution<float> distribution(0, FLAGS_delay);
-
 	MPI_Barrier(MPI_COMM_WORLD);
 	start = steady_clock::now();
 	int steps = FLAGS_save_num * FLAGS_save_interval;
 	for (int i = 0; i < steps; i++) {
-		int delay = distribution(generator) * 1000000;
-		this_thread::sleep_for (microseconds(delay));
+		iter_start = steady_clock::now();
 
 		// compute total prod
 		int idx = rand() % xl.n_cols;
@@ -278,6 +284,13 @@ void saga_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl
 			elapsed(to_save) = duration_cast<duration<float>>(steady_clock::now() - start).count();
 			cout << "Process " << rank << " saved num: " << to_save << " time: " << elapsed(to_save) << endl;
 		}
+
+		// straggler
+		if (rank == FLAGS_straggler) {
+			float sleep_time = duration_cast<duration<float>>(
+					steady_clock::now() - iter_start).count() * 1e9 * FLAGS_delay_fraction;
+			this_thread::sleep_for(nanoseconds(int(sleep_time)));
+		}
 	}
 }
 
@@ -298,7 +311,7 @@ int main(int argc, char* argv[]) {
 		<< " OMP max threads: " << omp_get_max_threads()
 		<< " Train file: " << FLAGS_train_data << " Test file: " << FLAGS_test_data
 		<< " method: " << FLAGS_method << " sync: " << FLAGS_sync
-		<< " eta: " << FLAGS_eta << endl;
+		<< " eta: " << FLAGS_eta << " straggler delay fraction: " << FLAGS_delay_fraction << endl;
 
 	// sizes
 	vector<int> feature_sizes(size, FLAGS_d / size);
