@@ -61,4 +61,13 @@ void LogisticL2Update(const arma::Col<float>& full_gradl, const arma::SpMat<floa
 	}
 }
 
+void LRL2Update(const arma::SpMat<float>& xl, const arma::Col<float>& yl,
+		const arma::Col<float>& prod, arma::Col<float>& wl, const float& eta, const float& reg) {
+	// for SGD. xl (dlxn), yl (nx1), prod (nx1), wl (dlx1)
+	wl *= 1 - eta * reg;
+	for (auto it = xl.begin(); it != xl.end(); ++it) {
+		wl.at(it.row()) -= eta * (prod.at(it.col()) - yl.at(it.col())) * (*it) / xl.n_cols;
+	}
+}
+
 #endif

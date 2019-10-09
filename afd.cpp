@@ -17,6 +17,7 @@
 
 #include "src/read_libsvm.h"
 #include "src/logistic.h"
+#include "src/lr.h"
 #include "src/sparse_ops.h"
 
 DEFINE_double(reg, 1e-4, "regularization coefficient");
@@ -28,6 +29,7 @@ DEFINE_int32(d, 47236, "number of features");
 DEFINE_int32(n_train, 677399, "number of training instances");
 DEFINE_int32(n_test, 20242, "number of testing instances");
 
+DEFINE_int32(model, 0, "0-logistic regression, 1-linear regression");
 DEFINE_int32(method, 0, "0-sgd, 1-svrg, 2-saga");
 DEFINE_int32(inner, 677399, "inner iteration");
 DEFINE_int32(save_interval, 677399, "save every #iter");
@@ -113,7 +115,12 @@ void sgd_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl_
 		// compute stochastic gradient
 		{
 			lock_guard<mutex> lock(wl_mutex);
-			LogisticL2Update(xl.col(idx), yl.row(idx), total_prod, wl, FLAGS_eta, FLAGS_reg);
+			if (FLAGS_model == 0) {
+				LogisticL2Update(xl.col(idx), yl.row(idx), total_prod, wl, FLAGS_eta, FLAGS_reg);
+			}
+			else if (FLAGS_model == 1) {
+				LRL2Update(xl.col(idx), yl.row(idx), total_prod, wl, FLAGS_eta, FLAGS_reg);
+			}
 		}
 
 		// save
@@ -403,8 +410,15 @@ int main(int argc, char* argv[]) {
 				MPI_COMM_WORLD);
 
 		if (rank == FLAGS_root) {
-			float test_obj = logistic(test_total_prod, test_yl) + total_l2_reg;
-			float train_obj = logistic(train_total_prod, yl) + total_l2_reg;
+			float test_obj, train_obj;
+			if (FLAGS_model == 0) {
+				test_obj = logistic(test_total_prod, test_yl) + total_l2_reg;
+				train_obj = logistic(train_total_prod, yl) + total_l2_reg;
+			}
+			else if (FLAGS_model == 1) {
+				test_obj = LR(test_total_prod, test_yl) + total_l2_reg;
+				train_obj = LR(train_total_prod, yl) + total_l2_reg;
+			}
 			cout << "Step: " << FLAGS_save_interval * i
 				<< " Time: " << elapsed(i) << setprecision(20)
 				<< " Train obj: " << train_obj << " Test obj: " << test_obj << endl;
