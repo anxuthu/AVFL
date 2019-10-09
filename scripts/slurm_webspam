@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=webspam_sgd
-#SBATCH --output=logs/log_webspam_sgd_sync8
-#SBATCH --nodes=8 #number of nodes requested
+#SBATCH --job-name=webspam
+#SBATCH --output=webspam
+#SBATCH --nodes=2 #number of nodes requested
 
-#SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=3
+#SBATCH --ntasks-per-node=8
+#SBATCH --cpus-per-task=2
 #SBATCH --mem=50g
-#SBATCH --partition=opa # opa, ib
+#SBATCH --partition=ib # opa, ib
 #SBATCH --cluster=mpi # cluster name is required
 #SBATCH --mail-user=an.xu@pitt.edu #send email to this address if ...
 #SBATCH --mail-type=END,FAIL # ... job ends or fails
@@ -15,10 +15,10 @@
 
 module purge
 module load openmpi/3.1.1 gcc/5.4.0 cmake/3.13.3 mkl/2019.4 lapack/3.8.0
-mpirun -np $SLURM_NTASKS ./bin/afdsgd \
+mpirun -np $SLURM_NTASKS ./bin/afd \
     --reg 1e-4 --eta 0.1 \
     --d 16609143 --n_train 280000 --n_test 70000 \
-    --save_interval 10000 --save_num 20 \
-    --sync 1 --max 0 --delay 0 \
+    --inner 280000 --save_interval 280000 --save_num 15 \
+    --model 0 --method 1 --sync 0 --max 0 --delay_fraction 2 \
     --train_data "/ihome/hhuang/anx6/datasets/webspam_train" \
     --test_data "/ihome/hhuang/anx6/datasets/webspam_test"

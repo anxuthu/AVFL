@@ -1,0 +1,24 @@
+#!/bin/bash
+#SBATCH --job-name=url
+#SBATCH --output=url
+#SBATCH --nodes=2 #number of nodes requested
+
+#SBATCH --ntasks-per-node=8
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=50g
+#SBATCH --partition=ib # opa, ib
+#SBATCH --cluster=mpi # cluster name is required
+#SBATCH --mail-user=an.xu@pitt.edu #send email to this address if ...
+#SBATCH --mail-type=END,FAIL # ... job ends or fails
+#SBATCH --time=4-00:00 # 4 days walltime in dd-hh:mm format
+#SBATCH --qos=long # required if walltime is greater than 3 days
+
+module purge
+module load openmpi/3.1.1 gcc/5.4.0 cmake/3.13.3 mkl/2019.4 lapack/3.8.0
+mpirun -np $SLURM_NTASKS ./bin/afd \
+    --reg 1e-4 --eta 0.005 \
+    --d 3231961 --n_train 1916904 --n_test 479226 \
+    --inner 1916904 --save_interval 1916904 --save_num 50 \
+    --model 0 --method 1 --sync 0 --delay_fraction 2.5 \
+    --train_data "/ihome/hhuang/anx6/datasets/url_train" \
+    --test_data "/ihome/hhuang/anx6/datasets/url_test"

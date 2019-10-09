@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=rcv1bin
-#SBATCH --output=tmp0
+#SBATCH --output=rcvc1bin
 
 #SBATCH --nodes=4 #number of nodes requested
 #SBATCH --ntasks-per-node=1
@@ -18,7 +18,7 @@ module load openmpi/3.1.1 gcc/5.4.0 cmake/3.13.3 mkl/2019.4 lapack/3.8.0 openmpi
 mpirun -np $SLURM_NTASKS ./bin/afd \
     --reg 1e-4 --eta 0.05 \
     --d 47236 --n_train 677399 --n_test 20242 \
-    --save_interval 677399 --save_num 10 \
-    --method 1 --sync 0 --delay_fraction 0.2 \
+    --inner 677399 --save_interval 677399 --save_num 10 \
+    --model 0 --method 1 --sync 0 --delay_fraction 0.2 \
     --train_data "/ihome/hhuang/anx6/datasets/rcv1_test_binary" \
     --test_data "/ihome/hhuang/anx6/datasets/rcv1_train_binary"
