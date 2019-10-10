@@ -168,7 +168,12 @@ void svrg_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl
 		}
 		MPI_Allreduce(full_prod.begin(), total_full_prod.begin(), full_prod.size(),
 				MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
-		LogisticGrad(xl, yl, total_full_prod, full_gradl);
+		if (FLAGS_model == 0) {
+			LogisticGrad(xl, yl, total_full_prod, full_gradl);
+		}
+		else if (FLAGS_model == 1) {
+			LRGrad(xl, yl, total_full_prod, full_gradl);
+		}
 		bool stop = false;
 		cout << "Process " << rank << " outer iteration " << cur_outer << ". Full grad time: "
 			<< duration_cast<duration<float>>(steady_clock::now() - start).count() << endl;
@@ -197,8 +202,14 @@ void svrg_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl
 			// compute stochastic gradient
 			{
 				lock_guard<mutex> lock(wl_mutex);
-				LogisticL2Update(full_gradl, xl.col(idx), yl.row(idx), total_full_prod.row(idx),
+				if (FLAGS_model == 0) {
+					LogisticL2Update(full_gradl, xl.col(idx), yl.row(idx), total_full_prod.row(idx),
 						total_prod, wl, FLAGS_eta, FLAGS_reg);
+				}
+				else if (FLAGS_model == 1) {
+					LRL2Update(full_gradl, xl.col(idx), yl.row(idx), total_full_prod.row(idx),
+						total_prod, wl, FLAGS_eta, FLAGS_reg);
+				}
 			}
 
 			// save
@@ -251,8 +262,14 @@ void saga_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl
 	Mul(xl, wl, full_prod);
 	MPI_Allreduce(full_prod.begin(), total_full_prod.begin(), full_prod.size(),
 			MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
-	LogisticGrad(xl, yl, total_full_prod, hist_gradl);
-	LogisticGrad(xl, yl, total_full_prod, hist_gradl_avg);
+	if (FLAGS_model == 0) {
+		LogisticGrad(xl, yl, total_full_prod, hist_gradl);
+		LogisticGrad(xl, yl, total_full_prod, hist_gradl_avg);
+	}
+	else if (FLAGS_model == 1) {
+		LRGrad(xl, yl, total_full_prod, hist_gradl);
+		LRGrad(xl, yl, total_full_prod, hist_gradl_avg);
+	}
 
 	MPI_Barrier(MPI_COMM_WORLD);
 	start = steady_clock::now();
@@ -277,7 +294,12 @@ void saga_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl
 		// compute stochastic gradient
 		{
 			lock_guard<mutex> lock(wl_mutex);
-			LogisticGrad(xl.col(idx), yl.row(idx), total_prod, gradl);
+			if (FLAGS_model == 0) {
+				LogisticGrad(xl.col(idx), yl.row(idx), total_prod, gradl);
+			}
+			else if (FLAGS_model == 1) {
+				LRGrad(xl.col(idx), yl.row(idx), total_prod, gradl);
+			}
 			gradl += FLAGS_reg * wl;
 			wl -= FLAGS_eta * (gradl - hist_gradl.col(idx) +  hist_gradl_avg);
 			hist_gradl_avg += (gradl - hist_gradl.col(idx)) / xl.n_cols;
