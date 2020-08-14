@@ -40,8 +40,9 @@ DEFINE_int32(seed, 1234, "Random seed.");
 
 DEFINE_int32(sync, 0, "Async or sync");
 DEFINE_int32(max, 0, "");
-DEFINE_double(delay_fraction, 0, "random delay");
-DEFINE_int32(straggler, 0, "rank of the straggler");
+DEFINE_double(comm_delay_fraction, 0, "communication delay (synthetic)");
+DEFINE_double(delay_fraction, 0, "random delay of straggler");
+DEFINE_int32(straggler, 1, "rank of the straggler");
 
 using namespace std;
 using namespace arma;
@@ -54,6 +55,7 @@ void listener(SpMat<float> &xl, Col<float> &wl) {
 	int size, source, idx, finished_workers = 0;
 	MPI_Status status;
 	MPI_Comm_size(MPI_COMM_WORLD, &size);
+	float comm_time = 0;
 
 	while (1) {
 		MPI_Recv(&idx, 1, MPI_INT, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &status);
@@ -75,8 +77,14 @@ void listener(SpMat<float> &xl, Col<float> &wl) {
 			lock_guard<mutex> lock(wl_mutex);
 			Mul(xl.col(idx), wl, prod);
 		}
+
+		// comm delay
+		//this_thread::sleep_for(nanoseconds(int(comm_time * FLAGS_comm_delay_fraction)));
+
 		// send back result
+		steady_clock::time_point comm_start = steady_clock::now();
 		MPI_Send(prod.begin(), prod.size(), MPI_FLOAT, source, 1, MPI_COMM_WORLD);
+		comm_time = duration_cast<duration<float>>(steady_clock::now() - comm_start).count() * 1e9;
 	}
 }
 
@@ -88,7 +96,8 @@ void sgd_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl_
 	MPI_Status status;
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 	MPI_Comm_size(MPI_COMM_WORLD, &size);
-	steady_clock::time_point start, iter_start;
+	steady_clock::time_point start, comp_start, tmp;
+	float comm=0, comp=0, sync=0;
 
 	Col<float> total_prod(1, fill::zeros), prod(1, fill::zeros);
 
@@ -96,11 +105,10 @@ void sgd_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl_
 	start = steady_clock::now();
 	int steps = FLAGS_save_num * FLAGS_save_interval;
 	for (int i = 0; i < steps; i++) {
-		iter_start = steady_clock::now();
-
-		// compute total prod
+		// compute total prod with communication
 		int idx = rand() % xl.n_cols;
 		total_prod.fill(0);
+		tmp = steady_clock::now();
 		for (int r = 0; r < size; r++) {
 			MPI_Isend(&idx, 1, MPI_INT, r, 0, MPI_COMM_WORLD, &req);
 		}
@@ -108,10 +116,15 @@ void sgd_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl_
 			MPI_Recv(prod.begin(), prod.size(), MPI_FLOAT, MPI_ANY_SOURCE, 1, MPI_COMM_WORLD, &status);
 			total_prod += prod;
 		}
+		comm += duration_cast<duration<float>>(steady_clock::now() - tmp).count();
+
+		tmp = steady_clock::now();
 		if (FLAGS_sync) {
 			MPI_Barrier(MPI_COMM_WORLD);
 		}
+		sync += duration_cast<duration<float>>(steady_clock::now() - tmp).count();
 
+		comp_start = steady_clock::now(); // subtract communication time
 		// compute stochastic gradient
 		{
 			lock_guard<mutex> lock(wl_mutex);
@@ -123,6 +136,14 @@ void sgd_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl_
 			}
 		}
 
+		// straggler
+		if (rank == FLAGS_straggler) {
+			float sleep_time = duration_cast<duration<float>>(
+					steady_clock::now() - comp_start).count() * 1e9 * FLAGS_delay_fraction;
+			this_thread::sleep_for(nanoseconds(int(sleep_time)));
+		}
+		comp += duration_cast<duration<float>>(steady_clock::now() - comp_start).count();
+
 		// save
 		if ((i + 1) % FLAGS_save_interval == 0) {
 			int to_save = (i + 1) / FLAGS_save_interval;
@@ -130,14 +151,8 @@ void sgd_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl_
 			elapsed(to_save) = duration_cast<duration<float>>(steady_clock::now() - start).count();
 			cout << "Process " << rank << " saved num: " << to_save << " time: " << elapsed(to_save) << endl;
 		}
-
-		// straggler
-		if (rank == FLAGS_straggler) {
-			float sleep_time = duration_cast<duration<float>>(
-					steady_clock::now() - iter_start).count() * 1e9 * FLAGS_delay_fraction;
-			this_thread::sleep_for(nanoseconds(int(sleep_time)));
-		}
 	}
+	cout << "comp " << comp << ", comm " << comm << ", sync " << sync << endl;
 }
 
 
@@ -183,8 +198,6 @@ void svrg_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl
 		float base = elapsed(saved);
 		start = steady_clock::now();
 		for (int i = 0; i < FLAGS_inner; ++i) {
-			iter_start = steady_clock::now();
-
 			// compute total prod
 			int idx = rand() % xl.n_cols;
 			total_prod.fill(0);
@@ -198,6 +211,7 @@ void svrg_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl
 			if (FLAGS_sync) {
 				MPI_Barrier(MPI_COMM_WORLD);
 			}
+			iter_start = steady_clock::now(); // subtract communication time
 
 			// compute stochastic gradient
 			{
@@ -212,6 +226,13 @@ void svrg_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl
 				}
 			}
 
+			// straggler
+			if (rank == FLAGS_straggler) {
+				float sleep_time = duration_cast<duration<float>>(
+						steady_clock::now() - iter_start).count() * 1e9 * FLAGS_delay_fraction;
+				this_thread::sleep_for(nanoseconds(int(sleep_time)));
+			}
+
 			// save
 			cur_step ++;
 			if (cur_step % FLAGS_save_interval == 0) {
@@ -220,13 +241,6 @@ void svrg_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl
 				elapsed(to_save) = duration_cast<duration<float>>(
 						steady_clock::now() - start).count() + base;
 				cout << "Process " << rank << " saved num: " << to_save << " time: " << elapsed(to_save) << endl;
-			}
-
-			// straggler
-			if (rank == FLAGS_straggler) {
-				float sleep_time = duration_cast<duration<float>>(
-						steady_clock::now() - iter_start).count() * 1e9 * FLAGS_delay_fraction;
-				this_thread::sleep_for(nanoseconds(int(sleep_time)));
 			}
 
 			// finished
@@ -275,8 +289,6 @@ void saga_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl
 	start = steady_clock::now();
 	int steps = FLAGS_save_num * FLAGS_save_interval;
 	for (int i = 0; i < steps; i++) {
-		iter_start = steady_clock::now();
-
 		// compute total prod
 		int idx = rand() % xl.n_cols;
 		total_prod.fill(0);
@@ -290,6 +302,7 @@ void saga_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl
 		if (FLAGS_sync) {
 			MPI_Barrier(MPI_COMM_WORLD);
 		}
+		iter_start = steady_clock::now(); // subtract communication time
 
 		// compute stochastic gradient
 		{
@@ -306,19 +319,19 @@ void saga_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl
 			hist_gradl.col(idx) = gradl;
 		}
 
+		// straggler
+		if (rank == FLAGS_straggler) {
+			float sleep_time = duration_cast<duration<float>>(
+					steady_clock::now() - iter_start).count() * 1e9 * FLAGS_delay_fraction;
+			this_thread::sleep_for(nanoseconds(int(sleep_time)));
+		}
+
 		// save
 		if ((i + 1) % FLAGS_save_interval == 0) {
 			int to_save = (i + 1) / FLAGS_save_interval;
 			wl_bk.col(to_save) = wl;
 			elapsed(to_save) = duration_cast<duration<float>>(steady_clock::now() - start).count();
 			cout << "Process " << rank << " saved num: " << to_save << " time: " << elapsed(to_save) << endl;
-		}
-
-		// straggler
-		if (rank == FLAGS_straggler) {
-			float sleep_time = duration_cast<duration<float>>(
-					steady_clock::now() - iter_start).count() * 1e9 * FLAGS_delay_fraction;
-			this_thread::sleep_for(nanoseconds(int(sleep_time)));
 		}
 	}
 }
@@ -390,6 +403,8 @@ int main(int argc, char* argv[]) {
 		MPI_Send(&idx, 1, MPI_INT, r, 0, MPI_COMM_WORLD);
 	}
 	t.join();
+	//MPI_Finalize();
+	//return 0;
 
 	/****** Testing ******/
 	start = steady_clock::now();
