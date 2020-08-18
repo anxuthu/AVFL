@@ -17,4 +17,6 @@ include_directories("/home/an/third_party/bin/include")
 link_directories("/home/an/third_party/lib")
 
 add_executable(afd "afd.cpp" ${objs} ${headers})
+add_executable(afdmc "afd_mc.cpp" ${objs} ${headers})
 target_link_libraries(afd gflags armadillo)
+target_link_libraries(afdmc gflags armadillo)

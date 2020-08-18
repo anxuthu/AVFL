@@ -25,10 +25,10 @@ void LRGrad(const arma::SpMat<float>& xl, const arma::Col<float>& yl,
 
 void LRGrad(const arma::SpMat<float>& xl, const arma::Col<float>& yl,
 		const arma::Col<float>& prod, arma::Mat<float>& gradl) {
-	// xl (dlxn), yl (nx1), prod (nx1), wl (dlx1), gradl (dlx1)
+	// For SAGA. xl (dlxn), yl (nx1), prod (nx1), wl (dlx1), gradl (dlxn)
 	std::memset(gradl.begin(), 0, gradl.size() * sizeof(float));
 	for (auto it = xl.begin(); it != xl.end(); ++it) {
-		gradl.at(it.row()) = (prod.at(it.col()) - yl.at(it.col())) * (*it);
+		gradl.at(it.row(), it.col()) = (prod.at(it.col()) - yl.at(it.col())) * (*it);
 	}
 }
 

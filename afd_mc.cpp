@@ -1,3 +1,4 @@
+// multinomial logistic regression for multiclass classification
 #include <iostream>
 #include <chrono>
 #include <cassert>
@@ -16,23 +17,22 @@
 #include <gflags/gflags.h>
 
 #include "src/read_libsvm.h"
-#include "src/logistic.h"
-#include "src/lr.h"
-#include "src/sparse_ops.h"
+#include "src/logistic_mc.h"
+#include "src/sparse_ops_mc.h"
 
 DEFINE_double(reg, 1e-4, "regularization coefficient");
 DEFINE_double(eta, 0.1, "step size");
 
-DEFINE_string(train_data, "/ihome/hhuang/anx6/datasets/rcv1_test_binary", "training data path");
-DEFINE_string(test_data, "/ihome/hhuang/anx6/datasets/rcv1_train_binary", "training data path");
-DEFINE_int32(d, 47236, "number of features");
-DEFINE_int32(n_train, 677399, "number of training instances");
-DEFINE_int32(n_test, 20242, "number of testing instances");
+DEFINE_string(train_data, "/home/an/datasets/news20.scale", "training data path");
+DEFINE_string(test_data, "/home/an/datasets/news20.t.scale", "training data path");
+DEFINE_int32(d, 62061, "number of features");
+DEFINE_int32(n_train, 15935, "number of training instances");
+DEFINE_int32(n_test, 3993, "number of testing instances");
+DEFINE_int32(n_class, 20, "number of classes (starting from 0 or 1)");
 
-DEFINE_int32(model, 0, "0-logistic regression, 1-linear regression");
 DEFINE_int32(method, 0, "0-sgd, 1-svrg, 2-saga");
-DEFINE_int32(inner, 677399, "inner iteration");
-DEFINE_int32(save_interval, 677399, "save every #iter");
+DEFINE_int32(inner, 15935, "inner iteration");
+DEFINE_int32(save_interval, 15935, "save every #iter");
 DEFINE_int32(save_num, 1, "total save num");
 
 DEFINE_int32(root, 0, "MPI root.");
@@ -51,7 +51,7 @@ using namespace std::chrono;
 mutex wl_mutex;
 
 
-void listener(SpMat<float> &xl, Col<float> &wl) {
+void listener(SpMat<float> &xl, Mat<float> &wl) {
 	int size, source, idx, finished_workers = 0;
 	MPI_Status status;
 	MPI_Comm_size(MPI_COMM_WORLD, &size);
@@ -72,7 +72,7 @@ void listener(SpMat<float> &xl, Col<float> &wl) {
 		}
 
 		// compute local prod
-		Col<float> prod(1, fill::zeros);
+		Col<float> prod(FLAGS_n_class, fill::zeros);
 		{
 			lock_guard<mutex> lock(wl_mutex);
 			Mul(xl.col(idx), wl, prod);
@@ -89,7 +89,7 @@ void listener(SpMat<float> &xl, Col<float> &wl) {
 }
 
 
-void sgd_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl_bk,
+void sgd_train(SpMat<float>& xl, Col<float>& yl, Mat<float>& wl, Cube<float>& wl_bk,
 		Col<float>& elapsed) {
 	int rank, size;
 	MPI_Request req;
@@ -99,7 +99,7 @@ void sgd_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl_
 	steady_clock::time_point start, comp_start, tmp;
 	float comm=0, comp=0, sync=0;
 
-	Col<float> total_prod(1, fill::zeros), prod(1, fill::zeros);
+	Col<float> total_prod(FLAGS_n_class, fill::zeros), prod(FLAGS_n_class, fill::zeros);
 
 	MPI_Barrier(MPI_COMM_WORLD);
 	start = steady_clock::now();
@@ -128,12 +128,7 @@ void sgd_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl_
 		// compute stochastic gradient
 		{
 			lock_guard<mutex> lock(wl_mutex);
-			if (FLAGS_model == 0) {
-				LogisticL2Update(xl.col(idx), yl.row(idx), total_prod, wl, FLAGS_eta, FLAGS_reg);
-			}
-			else if (FLAGS_model == 1) {
-				LRL2Update(xl.col(idx), yl.row(idx), total_prod, wl, FLAGS_eta, FLAGS_reg);
-			}
+			LogisticMCL2Update(xl.col(idx), yl.row(idx), total_prod, wl, FLAGS_eta, FLAGS_reg);
 		}
 
 		// straggler
@@ -147,7 +142,7 @@ void sgd_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl_
 		// save
 		if ((i + 1) % FLAGS_save_interval == 0) {
 			int to_save = (i + 1) / FLAGS_save_interval;
-			wl_bk.col(to_save) = wl;
+			wl_bk.slice(to_save) = wl;
 			elapsed(to_save) = duration_cast<duration<float>>(steady_clock::now() - start).count();
 			cout << "Process " << rank << " saved num: " << to_save << " time: " << elapsed(to_save) << endl;
 		}
@@ -156,7 +151,7 @@ void sgd_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl_
 }
 
 
-void svrg_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl_bk,
+void svrg_train(SpMat<float>& xl, Col<float>& yl, Mat<float>& wl, Cube<float>& wl_bk,
 		Col<float>& elapsed) {
 	int rank, size;
 	MPI_Request req;
@@ -165,9 +160,10 @@ void svrg_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl
 	MPI_Comm_size(MPI_COMM_WORLD, &size);
 	steady_clock::time_point start, iter_start;
 
-	Col<float> total_prod(1, fill::zeros), prod(1, fill::zeros);
-	Col<float> total_full_prod(xl.n_cols, fill::zeros), full_prod(xl.n_cols, fill::zeros);
-	Col<float> full_gradl(xl.n_rows, fill::zeros);
+	Col<float> total_prod(FLAGS_n_class, fill::zeros), prod(FLAGS_n_class, fill::zeros);
+	Mat<float> total_full_prod(FLAGS_n_class, xl.n_cols, fill::zeros), 
+		full_prod(FLAGS_n_class, xl.n_cols, fill::zeros);
+	Mat <float> full_gradl(FLAGS_n_class, xl.n_rows, fill::zeros);
 
 	MPI_Barrier(MPI_COMM_WORLD);
 	int steps = FLAGS_save_num * FLAGS_save_interval;
@@ -183,12 +179,7 @@ void svrg_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl
 		}
 		MPI_Allreduce(full_prod.begin(), total_full_prod.begin(), full_prod.size(),
 				MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
-		if (FLAGS_model == 0) {
-			LogisticGrad(xl, yl, total_full_prod, full_gradl);
-		}
-		else if (FLAGS_model == 1) {
-			LRGrad(xl, yl, total_full_prod, full_gradl);
-		}
+		LogisticMCGrad(xl, yl, total_full_prod, full_gradl);
 		bool stop = false;
 		cout << "Process " << rank << " outer iteration " << cur_outer << ". Full grad time: "
 			<< duration_cast<duration<float>>(steady_clock::now() - start).count() << endl;
@@ -216,14 +207,8 @@ void svrg_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl
 			// compute stochastic gradient
 			{
 				lock_guard<mutex> lock(wl_mutex);
-				if (FLAGS_model == 0) {
-					LogisticL2Update(full_gradl, xl.col(idx), yl.row(idx), total_full_prod.row(idx),
+				LogisticMCL2Update(full_gradl, xl.col(idx), yl.row(idx), total_full_prod.col(idx),
 						total_prod, wl, FLAGS_eta, FLAGS_reg);
-				}
-				else if (FLAGS_model == 1) {
-					LRL2Update(full_gradl, xl.col(idx), yl.row(idx), total_full_prod.row(idx),
-						total_prod, wl, FLAGS_eta, FLAGS_reg);
-				}
 			}
 
 			// straggler
@@ -237,7 +222,7 @@ void svrg_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl
 			cur_step ++;
 			if (cur_step % FLAGS_save_interval == 0) {
 				int to_save = cur_step / FLAGS_save_interval;
-				wl_bk.col(to_save) = wl;
+				wl_bk.slice(to_save) = wl;
 				elapsed(to_save) = duration_cast<duration<float>>(
 						steady_clock::now() - start).count() + base;
 				cout << "Process " << rank << " saved num: " << to_save << " time: " << elapsed(to_save) << endl;
@@ -258,7 +243,7 @@ void svrg_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl
 }
 
 
-void saga_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl_bk,
+void saga_train(SpMat<float>& xl, Col<float>& yl, Mat<float>& wl, Cube<float>& wl_bk,
 		Col<float>& elapsed) {
 	int rank, size;
 	MPI_Request req;
@@ -267,23 +252,18 @@ void saga_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl
 	MPI_Comm_size(MPI_COMM_WORLD, &size);
 	steady_clock::time_point start, iter_start;
 
-	Col<float> total_prod(1, fill::zeros), prod(1, fill::zeros);
-	Col<float> total_full_prod(xl.n_cols, fill::zeros), full_prod(xl.n_cols, fill::zeros);
-	Mat<float> hist_gradl(xl.n_rows, xl.n_cols, fill::zeros);
-	Col<float> hist_gradl_avg(xl.n_rows, fill::zeros);
-	Col<float> gradl(xl.n_rows, fill::zeros);
+	Col<float> total_prod(FLAGS_n_class, fill::zeros), prod(FLAGS_n_class, fill::zeros);
+	Mat<float> total_full_prod(FLAGS_n_class, xl.n_cols, fill::zeros),
+		full_prod(FLAGS_n_class, xl.n_cols, fill::zeros);
+	Cube<float> hist_gradl(FLAGS_n_class, xl.n_rows, xl.n_cols, fill::zeros);
+	Mat<float> hist_gradl_avg(FLAGS_n_class, xl.n_rows, fill::zeros);
+	Mat<float> gradl(FLAGS_n_class, xl.n_rows, fill::zeros);
 
 	Mul(xl, wl, full_prod);
 	MPI_Allreduce(full_prod.begin(), total_full_prod.begin(), full_prod.size(),
 			MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
-	if (FLAGS_model == 0) {
-		LogisticGrad(xl, yl, total_full_prod, hist_gradl);
-		LogisticGrad(xl, yl, total_full_prod, hist_gradl_avg);
-	}
-	else if (FLAGS_model == 1) {
-		LRGrad(xl, yl, total_full_prod, hist_gradl);
-		LRGrad(xl, yl, total_full_prod, hist_gradl_avg);
-	}
+	LogisticMCGrad(xl, yl, total_full_prod, hist_gradl);
+	LogisticMCGrad(xl, yl, total_full_prod, hist_gradl_avg);
 
 	MPI_Barrier(MPI_COMM_WORLD);
 	start = steady_clock::now();
@@ -307,16 +287,11 @@ void saga_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl
 		// compute stochastic gradient
 		{
 			lock_guard<mutex> lock(wl_mutex);
-			if (FLAGS_model == 0) {
-				LogisticGrad(xl.col(idx), yl.row(idx), total_prod, gradl);
-			}
-			else if (FLAGS_model == 1) {
-				LRGrad(xl.col(idx), yl.row(idx), total_prod, gradl);
-			}
-			gradl += FLAGS_reg * wl;
-			wl -= FLAGS_eta * (gradl - hist_gradl.col(idx) +  hist_gradl_avg);
-			hist_gradl_avg += (gradl - hist_gradl.col(idx)) / xl.n_cols;
-			hist_gradl.col(idx) = gradl;
+			LogisticMCGrad(xl.col(idx), yl.row(idx), total_prod, gradl);
+			wl *= 1 - FLAGS_eta * FLAGS_reg;
+			wl -= FLAGS_eta * (gradl - hist_gradl.slice(idx) +  hist_gradl_avg);
+			hist_gradl_avg += (gradl - hist_gradl.slice(idx)) / xl.n_cols;
+			hist_gradl.slice(idx) = gradl;
 		}
 
 		// straggler
@@ -329,7 +304,7 @@ void saga_train(SpMat<float>& xl, Col<float>& yl, Col<float>& wl, Mat<float>& wl
 		// save
 		if ((i + 1) % FLAGS_save_interval == 0) {
 			int to_save = (i + 1) / FLAGS_save_interval;
-			wl_bk.col(to_save) = wl;
+			wl_bk.slice(to_save) = wl;
 			elapsed(to_save) = duration_cast<duration<float>>(steady_clock::now() - start).count();
 			cout << "Process " << rank << " saved num: " << to_save << " time: " << elapsed(to_save) << endl;
 		}
@@ -370,10 +345,10 @@ int main(int argc, char* argv[]) {
 	pair<SpMat<float>, Col<float>> data = ReadLibsvmSp(
 			FLAGS_train_data, start_feature, end_feature, FLAGS_n_train);
 	SpMat<float> xl = get<0>(data);
-	Col<float> yl = get<1>(data);
-	Col<float> wl(xl.n_rows, fill::zeros);
+	Col<float> yl = get<1>(data) - min(get<1>(data));
+	Mat<float> wl(FLAGS_n_class, xl.n_rows, fill::zeros);
 
-	Mat<float> wl_bk(xl.n_rows, FLAGS_save_num + 1, fill::zeros);
+	Cube<float> wl_bk(FLAGS_n_class, xl.n_rows, FLAGS_save_num + 1, fill::zeros);
 	Col<float> elapsed(FLAGS_save_num + 1, fill::zeros);
 	cout << "Process " << rank << " load train_data size " << xl.n_rows << "x" << xl.n_cols
 		<< " and " << xl.n_cols << "x1. Time: "
@@ -402,19 +377,17 @@ int main(int argc, char* argv[]) {
 		MPI_Send(&idx, 1, MPI_INT, r, 0, MPI_COMM_WORLD);
 	}
 	t.join();
-	//MPI_Finalize();
-	//return 0;
 
 	/****** Testing ******/
 	start = steady_clock::now();
 	pair<SpMat<float>, Col<float>> test_data = ReadLibsvmSp(
 			FLAGS_test_data, start_feature, end_feature, FLAGS_n_test);
 	SpMat<float> test_xl = get<0>(test_data);
-	Col<float> test_yl = get<1>(test_data);
-	Col<float> test_total_prod(test_xl.n_cols, fill::zeros);
-	Col<float> test_prod(test_xl.n_cols, fill::zeros);
-	Col<float> train_total_prod(xl.n_cols, fill::zeros);
-	Col<float> train_prod(xl.n_cols, fill::zeros);
+	Col<float> test_yl = get<1>(test_data) - min(get<1>(test_data));
+	Mat<float> test_total_prod(FLAGS_n_class, test_xl.n_cols, fill::zeros);
+	Mat<float> test_prod(FLAGS_n_class, test_xl.n_cols, fill::zeros);
+	Mat<float> train_total_prod(FLAGS_n_class, xl.n_cols, fill::zeros);
+	Mat<float> train_prod(FLAGS_n_class, xl.n_cols, fill::zeros);
 	Col<float> new_elapsed(FLAGS_save_num + 1, fill::zeros);
 	cout << "Process " << rank << " load test_data size " << test_xl.n_rows
 		<< "x" << test_xl.n_cols << " and " << test_xl.n_cols << "x1. Time: "
@@ -433,7 +406,7 @@ int main(int argc, char* argv[]) {
 	}
 
 	for (int i = 0; i < FLAGS_save_num + 1; i++) {
-		Col<float> wl = wl_bk.col(i);
+		Mat<float> wl = wl_bk.slice(i);
 		Mul(test_xl, wl, test_prod);
 		MPI_Reduce(test_prod.begin(), test_total_prod.begin(), test_prod.size(),
 				MPI_FLOAT, MPI_SUM, FLAGS_root, MPI_COMM_WORLD);
@@ -447,14 +420,8 @@ int main(int argc, char* argv[]) {
 
 		if (rank == FLAGS_root) {
 			float test_obj, train_obj;
-			if (FLAGS_model == 0) {
-				test_obj = logistic(test_total_prod, test_yl) + total_l2_reg;
-				train_obj = logistic(train_total_prod, yl) + total_l2_reg;
-			}
-			else if (FLAGS_model == 1) {
-				test_obj = LR(test_total_prod, test_yl) + total_l2_reg;
-				train_obj = LR(train_total_prod, yl) + total_l2_reg;
-			}
+			test_obj = logistic_mc(test_total_prod, test_yl) + total_l2_reg;
+			train_obj = logistic_mc(train_total_prod, yl) + total_l2_reg;
 			cout << "Step: " << FLAGS_save_interval * i
 				<< " Time: " << elapsed(i) << setprecision(20)
 				<< " Train obj: " << train_obj << " Test obj: " << test_obj << endl;
