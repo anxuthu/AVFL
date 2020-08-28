@@ -419,12 +419,15 @@ int main(int argc, char* argv[]) {
 				MPI_COMM_WORLD);
 
 		if (rank == FLAGS_root) {
-			float test_obj, train_obj;
+			float test_obj, train_obj, test_acc, train_acc;
 			test_obj = logistic_mc(test_total_prod, test_yl) + total_l2_reg;
 			train_obj = logistic_mc(train_total_prod, yl) + total_l2_reg;
+			test_acc = logistic_mc_acc(test_total_prod, test_yl);
+			train_acc = logistic_mc_acc(train_total_prod, yl);
 			cout << "Step: " << FLAGS_save_interval * i
 				<< " Time: " << elapsed(i) << setprecision(20)
-				<< " Train obj: " << train_obj << " Test obj: " << test_obj << endl;
+				<< " Train obj: " << train_obj << " Test obj: " << test_obj
+				<< " Train acc: " << train_acc << " Test acc: " << test_acc << endl;
 		}
 	}
 

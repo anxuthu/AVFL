@@ -5,5 +5,6 @@
 
 // multinomial logistic regression
 float logistic_mc(const arma::Mat<float>& prod, const arma::Col<float>& target);
+float logistic_mc_acc(const arma::Mat<float>& prod, const arma::Col<float>& target);
 
 #endif

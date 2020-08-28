@@ -14,9 +14,11 @@ file(GLOB headers "${dir}/src/*.h")
 file(GLOB objs "${dir}/src/*.cpp")
 
 include_directories("/home/an/third_party/bin/include")
-link_directories("/home/an/third_party/lib")
+link_directories("/home/an/third_party/lib64")
 
 add_executable(afd "afd.cpp" ${objs} ${headers})
 add_executable(afdmc "afd_mc.cpp" ${objs} ${headers})
+add_executable(fdmlmc "fdml_mc.cpp" ${objs} ${headers})
 target_link_libraries(afd gflags armadillo)
 target_link_libraries(afdmc gflags armadillo)
+target_link_libraries(fdmlmc gflags armadillo)

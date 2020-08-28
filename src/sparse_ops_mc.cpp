@@ -50,7 +50,8 @@ void LogisticMCGrad(const arma::SpMat<float>& xl, const arma::Col<float>& yl,
 }
 
 void LogisticMCL2Update(const arma::SpMat<float>& xl, const arma::Col<float>& yl,
-		const arma::Mat<float>& prod, arma::Mat<float>& wl, const float& eta, const float& reg) {
+		const arma::Mat<float>& prod, arma::Mat<float>& wl, const float& eta, const float& reg,
+		const float& fraction) {
 	// for SGD. xl (dlxn), yl (nx1), prod (cxn), wl (cxdl); y: 0 ~ c-1
 	wl *= 1 - eta * reg;
 	arma::Mat<float> z = arma::exp(prod);
@@ -61,9 +62,9 @@ void LogisticMCL2Update(const arma::SpMat<float>& xl, const arma::Col<float>& yl
 		int cur_class = yl.at(it.col());
 		int cur_feature = it.row();
 		// first term gradient
-		wl.col(cur_feature) -= eta * z.col(cur_sample) * (*it) / xl.n_cols;
+		wl.col(cur_feature) -= eta * z.col(cur_sample) * (*it) / xl.n_cols * fraction;
 		// second term gradient
-		wl.at(cur_class, cur_feature) -= - eta * (*it) / xl.n_cols;
+		wl.at(cur_class, cur_feature) -= - eta * (*it) / xl.n_cols * fraction;
 	}
 }
 
